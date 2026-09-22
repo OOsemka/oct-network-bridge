@@ -1,0 +1,63 @@
+/* Network Bridge tool. Prefix: netbridge- */
+
+.netbridge-lead {
+  max-width: 48rem;
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+}
+
+.netbridge-enslaved {
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
+  font-size: var(--pf-t--global--font--size--xs, 0.75rem);
+  margin-top: 2px;
+}
+
+.netbridge-table-wrap {
+  overflow: auto;
+  max-height: 28rem;
+}
+
+.netbridge-review-yaml {
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.netbridge-actions {
+  padding-top: var(--pf-t--global--spacer--md, 16px);
+}
+
+.netbridge-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pf-t--global--spacer--sm, 8px);
+}
+
+.netbridge-mcp-item {
+  max-width: 48rem;
+}
+
+.netbridge-bridge-flag {
+  margin-top: 4px;
+}
+
+.netbridge-bridge-alert {
+  margin-top: var(--pf-t--global--spacer--md, 16px);
+}
+
+.netbridge-remove-wrap {
+  display: inline-block;
+}
+
+.netbridge-ovn-mapping-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pf-t--global--spacer--sm, 8px);
+  margin-bottom: var(--pf-t--global--spacer--sm, 8px);
+}
+
+.netbridge-ovn-mapping-row .pf-v6-c-text-input-group {
+  flex: 1;
+}
+
+.netbridge-type-toggle {
+  margin-bottom: var(--pf-t--global--spacer--md, 16px);
+}
