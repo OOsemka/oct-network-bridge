@@ -176,6 +176,7 @@ const NetworkBridgePage: FC = () => {
   const [selectedPort, setSelectedPort] = useState('');
   const [bridgeType, setBridgeType] = useState<BridgeType>('linux-bridge');
   const [bridgeName, setBridgeName] = useState('br1');
+  const [bridgeNameManual, setBridgeNameManual] = useState(false);
   const [enableVlan, setEnableVlan] = useState(false);
   const [vlanId, setVlanId] = useState('');
   const [stpEnabled, setStpEnabled] = useState(false);
@@ -271,9 +272,11 @@ const NetworkBridgePage: FC = () => {
   }, [selectedFingerprint]);
 
   useEffect(() => {
-    const suggested = suggestBridgeName(usedBridgeNames, bridgeType);
-    setBridgeName(suggested);
-  }, [bridgeType, usedBridgeNames]);
+    if (!bridgeNameManual) {
+      const suggested = suggestBridgeName(usedBridgeNames, bridgeType);
+      setBridgeName(suggested);
+    }
+  }, [bridgeType, usedBridgeNames, bridgeNameManual]);
 
   useEffect(() => {
     setOvnMappings([{ localnet: '', bridge: bridgeName }]);
@@ -472,6 +475,7 @@ const NetworkBridgePage: FC = () => {
     const nextName = suggestBridgeName(usedBridgeNames, bridgeType);
     dashboardLogger.info(LOG_ACTION, 'Create another bridge', `next=${nextName}`);
     clearCreated();
+    setBridgeNameManual(false);
     setBridgeName(nextName);
     setSelectedPort('');
     setEnableVlan(false);
@@ -1128,6 +1132,7 @@ const NetworkBridgePage: FC = () => {
                         value={bridgeName}
                         onChange={(_event, value) => {
                           setBridgeName(value);
+                          setBridgeNameManual(true);
                           clearCreated();
                         }}
                         maxLength={15}

@@ -752,11 +752,18 @@ export function brExCarrierNodes(
 }
 
 function bridgeDependentsOnNode(nns: NodeNetworkStateKind, bridgeName: string): string[] {
+  const ifaces = nnsInterfaces(nns);
+  const bridgeIface = ifaces.find(
+    (i) => i.name === bridgeName && isBridgeIface(i),
+  );
+  const ownPorts = new Set(bridgeIface ? bridgePortNames(bridgeIface) : []);
+
   const names = new Set<string>();
-  for (const iface of nnsInterfaces(nns)) {
+  for (const iface of ifaces) {
     if (!iface.name || iface.name === bridgeName) continue;
     const type = (iface.type || '').toLowerCase();
     if (type === 'ethernet' || type === 'bond') continue;
+    if (ownPorts.has(iface.name)) continue;
     if (iface.vlan?.['base-iface'] === bridgeName) names.add(iface.name);
     if (bridgePortNames(iface).includes(bridgeName)) names.add(iface.name);
     if (iface.controller === bridgeName) names.add(iface.name);
