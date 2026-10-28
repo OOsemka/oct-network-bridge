@@ -111,12 +111,8 @@
   "Failed to load MachineConfigPools": "Failed to load MachineConfigPools",
   "No MachineConfigPools found": "No MachineConfigPools found",
   "MachineConfigPools are required to group nodes that share a NIC layout.": "MachineConfigPools are required to group nodes that share a NIC layout.",
-  "NMState operator not found — NodeNetworkState is required to list NICs.": "NMState operator not found — NodeNetworkState is required to list NICs.",
-  "Install the Kubernetes NMState operator to list physical NICs on cluster nodes.": "Install the Kubernetes NMState operator to list physical NICs on cluster nodes.",
   "You do not have permission to list NodeNetworkState resources.": "You do not have permission to list NodeNetworkState resources.",
   "Failed to load NodeNetworkState": "Failed to load NodeNetworkState",
-  "No NodeNetworkState resources found": "No NodeNetworkState resources found",
-  "The NMState operator is installed but has not reported interface state yet.": "The NMState operator is installed but has not reported interface state yet.",
   "Could not list Kubernetes Nodes": "Could not list Kubernetes Nodes",
   "Node membership for each pool may be incomplete.": "Node membership for each pool may be incomplete.",
   "Could not list existing network policies": "Could not list existing network policies",
@@ -137,5 +133,13 @@
   "Bridge {{name}} is already absent on the nodes. Delete the leftover policy {{policies}}?": "Bridge {{name}} is already absent on the nodes. Delete the leftover policy {{policies}}?",
   "This sets bridge {{name}} to absent with NMState, waits for the apply to succeed, then deletes the policy. This cannot be undone from this page.": "This sets bridge {{name}} to absent with NMState, waits for the apply to succeed, then deletes the policy. This cannot be undone from this page.",
   "Failed to remove bridge": "Failed to remove bridge",
-  "Cancel": "Cancel"
+  "Cancel": "Cancel",
+  "Finish NMState setup": "Finish NMState setup",
+  "Install NMState operator": "Install NMState operator",
+  "NMState has not reported node interfaces yet": "NMState has not reported node interfaces yet",
+  "NMState is installed.": "NMState is installed.",
+  "Select port interface": "Select port interface",
+  "The NMState operator is not installed": "The NMState operator is not installed",
+  "The operator is installed, but nodes are not reporting their interfaces. Finishing the setup creates the NMState instance if it is missing.": "The operator is installed, but nodes are not reporting their interfaces. Finishing the setup creates the NMState instance if it is missing.",
+  "This page reads and configures node interfaces with the Kubernetes NMState operator. Install it from redhat-operators with one click.": "This page reads and configures node interfaces with the Kubernetes NMState operator. Install it from redhat-operators with one click."
 }

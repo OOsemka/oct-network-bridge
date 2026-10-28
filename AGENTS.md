@@ -9,12 +9,14 @@ This repository is the **Network Bridge** ConsolePlugin: create linux-bridge and
 | | Value |
 | --- | --- |
 | Plugin ID / ConsolePlugin / `package.json` `consolePlugin.name` | **`oct-network-bridge`** |
-| Image | `quay.io/cjanisze/oct-network-bridge:1.0.0-ocp4.22` (`<semver>-ocp<major.minor>`) |
+| Image | `quay.io/cjanisze/oct-network-bridge:1.1.0-ocp4.22` (`<semver>-ocp<major.minor>`) |
 | i18n | `plugin__oct-network-bridge` |
 
 Display name is **Network Bridge**. No PVC or discovery sidecar.
 
-**Current version:** `1.0.0` (package.json / consolePlugin.version).
+**Current version:** `1.1.0` (package.json / consolePlugin.version).
+
+**NMState:** the page needs the Kubernetes NMState operator. If the `nodenetworkstates.nmstate.io` CRD is missing, it shows a one-click install (`src/components/NmstateSetup.tsx`, `src/utils/nmstate-install.ts`: Subscription `kubernetes-nmstate-operator`, channel `stable`, `redhat-operators`, then the `NMState` instance), or **Finish NMState setup** when the operator is there but no NodeNetworkState is reported. The console SDK reports no error for a watch on a missing CRD, so detection is by the CRD itself.
 
 ## Architecture (short)
 
@@ -56,7 +58,7 @@ MCPs are watched cluster-wide. `buildMcpNicGroups` fingerprints physical NIC nam
 Two axes in the catalog: git tag **`v1.x.x`** (semver) and optional branch **`ocp-X.Y`** when PatternFly or APIs diverge. Image tags **always** `<semver>-ocp<major.minor>` (e.g. `1.0.0-ocp4.22`). Storefront Add installs the newest stable semver compatible with the cluster; Update is explicit; one ConsolePlugin name runs one version.
 
 - Git: `main` tracks the newest supported minor (currently **4.22**). Optional `ocp-4.22`, `ocp-4.21`.
-- Images: `oct-network-bridge:1.0.0-ocp4.22` and `:1.0.0-ocp4.21`. **Always publish both** OpenShift minor tags (same digest if bits match). Catalog `versions[].image` must be the combined tag.
+- Images: `oct-network-bridge:1.1.0-ocp4.22` and `:1.1.0-ocp4.21`. **Always publish both** OpenShift minor tags (same digest if bits match). Catalog `versions[].image` must be the combined tag.
 - PatternFly 6 on 4.22; do not mix PF majors on one branch.
 
 ## Navigation (React Router v6 via v5-compat)
