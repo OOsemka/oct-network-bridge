@@ -1161,9 +1161,6 @@ export function buildBridgeDesiredState(opts: BuildBridgeNncpOpts): Record<strin
     if (opts.bridgeOptions.mcastSnooping !== undefined) {
       bridgeOpts['mcast-snooping-enable'] = opts.bridgeOptions.mcastSnooping;
     }
-    if (opts.bridgeOptions.allowExtraPatchPorts !== undefined) {
-      bridgeOpts['allow-extra-patch-ports'] = opts.bridgeOptions.allowExtraPatchPorts;
-    }
 
     let actualPort = opts.portName;
     if (opts.vlanTag && opts.vlanTag > 0) {
@@ -1187,6 +1184,11 @@ export function buildBridgeDesiredState(opts: BuildBridgeNncpOpts): Record<strin
       ipv4: ipv4Spec(opts.ipv4),
       ipv6: { enabled: false },
       bridge: {
+        // nmstate 2.x: allow-extra-patch-ports is a bridge property, not an
+        // option (under options it fails: "unknown field").
+        ...(opts.bridgeOptions.allowExtraPatchPorts !== undefined
+          ? { 'allow-extra-patch-ports': opts.bridgeOptions.allowExtraPatchPorts }
+          : {}),
         port: [{ name: actualPort }],
         options: Object.keys(bridgeOpts).length > 0 ? bridgeOpts : undefined,
       },
