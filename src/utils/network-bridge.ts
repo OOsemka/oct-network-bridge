@@ -414,6 +414,10 @@ export function nodesForMcp(mcp: MachineConfigPoolKind, nodes: NodeKindLite[]): 
 function isPhysicalOrBond(iface: NmstateInterfaceStatus): boolean {
   const name = iface.name || '';
   if (!name || EXCLUDED_NAME.test(name)) return false;
+  // NetworkManager-unmanaged interfaces (state "ignore"), e.g. the host side of
+  // pod veths, are reported as ethernet. They differ per node and made pools
+  // look like they had mixed NIC layouts.
+  if ((iface.state || '').toLowerCase() === 'ignore') return false;
   const type = (iface.type || '').toLowerCase();
   if (EXCLUDED_TYPES.has(type)) return false;
   if (type === 'linux-bridge' || type === 'ovs-bridge') return false;
@@ -714,22 +718,26 @@ export function brExUplinkChain(nns: NodeNetworkStateKind): Set<string> {
     }
   }
 
+  // Walk down from br-ex (and the default-route interface): its ports, VLAN
+  // bases and bond members. Only the seeds climb to their controller. A shared
+  // NIC such as bond0 under br-ex's bond0.2117 may also be the port of another
+  // bridge; that bridge does not carry br-ex and must stay removable.
   const chain = new Set<string>();
-  const queue = [...seeds];
+  const queue: Array<{ name: string; seed: boolean }> = seeds.map((name) => ({ name, seed: true }));
   while (queue.length > 0) {
-    const name = queue.pop() as string;
+    const { name, seed } = queue.pop() as { name: string; seed: boolean };
     if (!name || chain.has(name)) continue;
     chain.add(name);
 
     for (const iface of byName.get(name) || []) {
-      for (const port of bridgePortNames(iface)) queue.push(port);
+      for (const port of bridgePortNames(iface)) queue.push({ name: port, seed: false });
       const base = iface.vlan?.['base-iface'];
-      if (base) queue.push(base);
-      if (iface.controller) queue.push(iface.controller);
+      if (base) queue.push({ name: base, seed: false });
+      if (seed && iface.controller) queue.push({ name: iface.controller, seed: false });
     }
 
     for (const iface of ifaces) {
-      if (iface.controller === name && iface.name) queue.push(iface.name);
+      if (iface.controller === name && iface.name) queue.push({ name: iface.name, seed: false });
     }
   }
 
