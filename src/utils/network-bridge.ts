@@ -137,6 +137,7 @@ export type NncpResource = {
   spec: {
     nodeSelector: Record<string, string>;
     desiredState: Record<string, unknown>;
+    maxUnavailable?: number | string;
   };
 };
 
@@ -587,7 +588,7 @@ export function layoutNicsForNodes(
 /*  Existing bridge discovery                                          */
 /* ------------------------------------------------------------------ */
 
-function bridgePortNames(iface: NmstateInterfaceStatus): string[] {
+export function bridgePortNames(iface: NmstateInterfaceStatus): string[] {
   const ports = iface.bridge?.port || [];
   const names: string[] = [];
   for (const p of ports) {
@@ -1244,9 +1245,115 @@ export function buildBridgeNncp(opts: BuildBridgeNncpOpts): NncpResource {
     },
     spec: {
       nodeSelector: opts.nodeSelector,
+      // One node at a time: a mistake never takes several nodes' networks
+      // (and ODF/Ceph members) down together.
+      maxUnavailable: NNCP_MAX_UNAVAILABLE,
       desiredState: buildBridgeDesiredState(opts),
     },
   };
+}
+
+/** Nodes NMState reconfigures at once for policies written by this tool. */
+export const NNCP_MAX_UNAVAILABLE = 1;
+
+/* ------------------------------------------------------------------ */
+/*  Shared ports                                                       */
+/* ------------------------------------------------------------------ */
+
+/** Minimal NetworkAttachmentDefinition shape used to find macvlan/ipvlan users of a NIC. */
+export type NadLite = {
+  metadata: { name: string; namespace: string };
+  spec?: { config?: string };
+};
+
+/**
+ * Host interface a NAD attaches pods to directly (macvlan/ipvlan "master",
+ * host-device "device"). Bridge-type NADs attach to a bridge, not a NIC.
+ */
+export function nadHostInterface(nad: NadLite): string | undefined {
+  try {
+    const cfg = JSON.parse(nad.spec?.config || '{}') as {
+      type?: string;
+      master?: string;
+      device?: string;
+      plugins?: Array<{ type?: string; master?: string; device?: string }>;
+    };
+    const first = cfg.plugins?.[0] || cfg;
+    const type = (first.type || '').toLowerCase();
+    if (type === 'macvlan' || type === 'ipvlan') return first.master || undefined;
+    if (type === 'host-device') return first.device || undefined;
+  } catch {
+    /* unparsable config: not a direct NIC user */
+  }
+  return undefined;
+}
+
+/** What else uses a NIC on one node. */
+export type PortUse = {
+  node: string;
+  /** VLAN interfaces on the NIC (e.g. bond0.2115), excluding the ones listed as ignored. */
+  vlanChildren: string[];
+  /** The NIC is part of br-ex (the cluster default network). */
+  carriesBrEx: boolean;
+  /** NADs (namespace/name) whose pods sit directly on the NIC or its VLANs. */
+  nads: string[];
+};
+
+/**
+ * Changing what a NIC is attached to (adding it to a bridge, or removing it
+ * from one) makes NetworkManager re-activate it, which tears down and rebuilds
+ * everything on top of it: VLAN interfaces (ODF's Multus networks, br-ex on a
+ * VLAN) and the macvlan interfaces inside pods, which do not come back. Returns
+ * the nodes where the NIC is shared like that.
+ */
+export function portUses(
+  nnsList: NodeNetworkStateKind[],
+  portName: string,
+  nodeNames: string[],
+  nads: NadLite[],
+  ignore: string[] = [],
+): PortUse[] {
+  if (!portName) return [];
+  const want = new Set(nodeNames);
+  const uses: PortUse[] = [];
+  for (const nns of nnsList) {
+    const node = nns.metadata.name;
+    if (!want.has(node)) continue;
+    const ifaces = nnsInterfaces(nns);
+    const vlanChildren = ifaces
+      .filter((i) => i.name && i.vlan?.['base-iface'] === portName && !ignore.includes(i.name))
+      .map((i) => i.name as string);
+    const onNic = new Set([portName, ...vlanChildren]);
+    const nadUsers = nads
+      .filter((n) => {
+        const host = nadHostInterface(n);
+        return !!host && onNic.has(host);
+      })
+      .map((n) => `${n.metadata.namespace}/${n.metadata.name}`);
+    const carriesBrEx = brExUplinkChain(nns).has(portName);
+    if (vlanChildren.length || nadUsers.length || carriesBrEx) {
+      uses.push({ node, vlanChildren: vlanChildren.sort(), carriesBrEx, nads: nadUsers.sort() });
+    }
+  }
+  return uses.sort((a, b) => a.node.localeCompare(b.node));
+}
+
+export function summarizePortUses(uses: PortUse[]): { vlanChildren: string[]; brExNodes: string[]; nads: string[]; nodes: string[] } {
+  return {
+    vlanChildren: Array.from(new Set(uses.flatMap((u) => u.vlanChildren))).sort(),
+    brExNodes: uses.filter((u) => u.carriesBrEx).map((u) => u.node),
+    nads: Array.from(new Set(uses.flatMap((u) => u.nads))).sort(),
+    nodes: uses.map((u) => u.node),
+  };
+}
+
+/** Nodes where a VLAN interface with this exact name already exists. */
+export function existingInterfaceNodes(nnsList: NodeNetworkStateKind[], ifaceName: string, nodeNames: string[]): string[] {
+  const want = new Set(nodeNames);
+  return nnsList
+    .filter((n) => want.has(n.metadata.name) && nnsInterfaces(n).some((i) => i.name === ifaceName))
+    .map((n) => n.metadata.name)
+    .sort();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1263,6 +1370,8 @@ export type BridgeRemovePlan = {
   skipApply: boolean;
   issues: PlanMessage[];
   warnings: PlanMessage[];
+  /** Whole-NIC ports of this bridge that other networks also use (see portUses). */
+  sharedPorts: PortUse[];
 };
 
 export function buildAbsentBridgeDesiredState(opts: {
@@ -1287,6 +1396,7 @@ export function planBridgeRemoval(opts: {
   nnsList: NodeNetworkStateKind[];
   nncps: NncpKind[];
   scopeNodeNames: string[];
+  nads?: NadLite[];
 }): BridgeRemovePlan {
   const bridgeName = opts.item.name;
   const issues: PlanMessage[] = [];
@@ -1301,6 +1411,7 @@ export function planBridgeRemoval(opts: {
     skipApply: false,
     issues,
     warnings,
+    sharedPorts: [],
   };
 
   if (!bridgeName) {
@@ -1362,6 +1473,21 @@ export function planBridgeRemoval(opts: {
   const alreadyAbsent =
     !stillInNns && matchingNncps.length > 0 && stillPresentPolicies.length === 0;
 
+  // Whole-NIC ports (ethernet/bond) of this bridge that other networks also
+  // use. Removing the bridge re-activates them, like adding it did. Ports that
+  // are VLAN interfaces created for this bridge are not shared.
+  const sharedPorts: PortUse[] = [];
+  for (const nns of opts.nnsList) {
+    if (!applyNodes.has(nns.metadata.name)) continue;
+    const ifaces = nnsInterfaces(nns);
+    const bridge = ifaces.find((iface) => iface.name === bridgeName && isBridgeIface(iface));
+    for (const port of bridge ? bridgePortNames(bridge) : []) {
+      const type = (ifaces.find((i) => i.name === port)?.type || '').toLowerCase();
+      if (type !== 'ethernet' && type !== 'bond') continue;
+      sharedPorts.push(...portUses([nns], port, [nns.metadata.name], opts.nads || []));
+    }
+  }
+
   const ours = matchingNncps.filter(isManagedByBridgeTool);
   const patchPolicyNames: string[] = [];
   const deletePolicyNames: string[] = [];
@@ -1379,6 +1505,7 @@ export function planBridgeRemoval(opts: {
       skipApply: true,
       issues,
       warnings,
+      sharedPorts: [],
     };
   }
 
@@ -1434,6 +1561,7 @@ export function planBridgeRemoval(opts: {
         },
         spec: {
           nodeSelector: target.nodeSelector,
+          maxUnavailable: NNCP_MAX_UNAVAILABLE,
           desiredState,
         },
       });
@@ -1451,6 +1579,7 @@ export function planBridgeRemoval(opts: {
     skipApply: false,
     issues,
     warnings,
+    sharedPorts,
   };
 }
 

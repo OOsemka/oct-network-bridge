@@ -61,8 +61,15 @@ import {
   NodeNetworkStateModel,
   NodeNetworkConfigurationPolicyModel,
   NodeNetworkConfigurationEnactmentModel,
+  NetworkAttachmentDefinitionModel,
 } from '../utils/k8s-resources';
+import { AffectedPod, findPodsOnNads, restartPodsOneByOne } from '../utils/pod-restart';
 import {
+  NNCP_MAX_UNAVAILABLE,
+  NadLite,
+  existingInterfaceNodes,
+  portUses,
+  summarizePortUses,
   BridgeIpv4Config,
   BridgeInventoryItem,
   BridgeRemovePlan,
@@ -171,6 +178,17 @@ const NetworkBridgePage: FC = () => {
     isList: true,
     namespaced: false,
   });
+  // NADs in all namespaces: macvlan/ipvlan networks on a NIC lose their pod
+  // interfaces when that NIC is added to or removed from a bridge.
+  const [nadList] = useK8sWatchResource<K8sResourceCommon[]>({
+    groupVersionKind: {
+      group: NetworkAttachmentDefinitionModel.apiGroup,
+      version: NetworkAttachmentDefinitionModel.apiVersion,
+      kind: NetworkAttachmentDefinitionModel.kind,
+    },
+    isList: true,
+  });
+  const nads = useMemo(() => ((nadList || []) as unknown as NadLite[]), [nadList]);
 
   /* ---- form state ---- */
   const [selectedMcpNames, setSelectedMcpNames] = useState<string[]>([]);
@@ -197,6 +215,14 @@ const NetworkBridgePage: FC = () => {
     bridgeName: '',
   });
   const [removeTarget, setRemoveTarget] = useState<BridgeInventoryItem | null>(null);
+  const [allowSharedPort, setAllowSharedPort] = useState(false);
+  const [allowSharedRemove, setAllowSharedRemove] = useState(false);
+  /** NADs whose pods lost their interfaces in the last whole-NIC change (offer restarts). */
+  const [affectedNads, setAffectedNads] = useState<string[]>([]);
+  const [affectedPods, setAffectedPods] = useState<AffectedPod[] | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const [restartMessage, setRestartMessage] = useState('');
+  const [restartError, setRestartError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
   const [removePhase, setRemovePhase] = useState('');
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -294,6 +320,21 @@ const NetworkBridgePage: FC = () => {
     [ipv4Mode, ipAddress, prefixLength, gateway],
   );
 
+  /* ---- shared ports ---- */
+  const vlanPort = enableVlan && vlanId ? `${selectedPort}.${parseInt(vlanId, 10)}` : '';
+  /** Whole-NIC port used by other networks (VLAN interfaces, br-ex, macvlan/ipvlan NADs). */
+  const portShares = useMemo(
+    () => (selectedPort && !vlanPort ? portUses(nns, selectedPort, targetNodeNames, nads) : []),
+    [nns, selectedPort, vlanPort, targetNodeNames, nads],
+  );
+  const portShareSummary = useMemo(() => summarizePortUses(portShares), [portShares]);
+  /** A VLAN interface with the requested tag already exists (e.g. ODF's): bridging it is just as disruptive. */
+  const vlanPortTakenOn = useMemo(
+    () => (selectedPort && vlanPort ? existingInterfaceNodes(nns, vlanPort, targetNodeNames) : []),
+    [nns, selectedPort, vlanPort, targetNodeNames],
+  );
+  useEffect(() => setAllowSharedPort(false), [selectedPort, vlanPort]);
+
   /* ---- plan / validation ---- */
   const plan = useMemo(() => {
     const issues: { key: string; values?: Record<string, string> }[] = [];
@@ -328,6 +369,19 @@ const NetworkBridgePage: FC = () => {
       issues.push({
         key: 'Bridge name {{name}} already exists. Pick another name.',
         values: { name: bridgeName.trim() },
+      });
+    }
+
+    if (portShares.length > 0 && !allowSharedPort) {
+      issues.push({
+        key: '{{port}} also carries other networks. Use a VLAN interface for the bridge, or confirm bridging the whole NIC below.',
+        values: { port: selectedPort },
+      });
+    }
+    if (vlanPortTakenOn.length > 0) {
+      issues.push({
+        key: 'VLAN interface {{name}} already exists on {{nodes}}. Bridging it would take down what uses it today; pick another VLAN ID.',
+        values: { name: vlanPort, nodes: vlanPortTakenOn.join(', ') },
       });
     }
 
@@ -398,6 +452,10 @@ const NetworkBridgePage: FC = () => {
     targetNodeNames,
     usedBridgeNames,
     created.policyNames.length,
+    portShares,
+    allowSharedPort,
+    vlanPortTakenOn,
+    vlanPort,
   ]);
 
   const previewYaml = useMemo(() => {
@@ -416,8 +474,13 @@ const NetworkBridgePage: FC = () => {
       nnsList: nns,
       nncps,
       scopeNodeNames,
+      nads,
     });
-  }, [removeTarget, selectedGroups, nodes, nns, nncps, scopeNodeNames]);
+  }, [removeTarget, selectedGroups, nodes, nns, nncps, scopeNodeNames, nads]);
+  const removeShareSummary = useMemo(
+    () => summarizePortUses(removePlanPreview?.sharedPorts || []),
+    [removePlanPreview],
+  );
 
   /* ---- handlers ---- */
   const toggleMcp = useCallback(
@@ -432,6 +495,35 @@ const NetworkBridgePage: FC = () => {
   const goNetworkHub = () => {
     navigate('/community-tools/network');
   };
+
+  /* ---- restart pods that lost their Multus interfaces ---- */
+  const loadAffectedPods = useCallback(async (nadNames: string[]) => {
+    setRestartError(null);
+    try {
+      setAffectedPods(await findPodsOnNads(nadNames));
+    } catch (err) {
+      setRestartError(getK8sErrorMessage(err));
+    }
+  }, []);
+
+  const restartAffectedPods = useCallback(async () => {
+    if (!affectedPods?.length) return;
+    setRestarting(true);
+    setRestartError(null);
+    try {
+      const { restarted, skipped } = await restartPodsOneByOne(affectedPods, setRestartMessage);
+      setRestartMessage(
+        t('Restarted {{count}} pods.', { count: restarted.length }) +
+          (skipped.length ? ' ' + t('Not restarted (no controller to recreate them): {{pods}}', { pods: skipped.join(', ') }) : ''),
+      );
+      setAffectedPods([]);
+      setAffectedNads([]);
+    } catch (err) {
+      setRestartError(getK8sErrorMessage(err));
+    } finally {
+      setRestarting(false);
+    }
+  }, [affectedPods, t]);
 
   const handleCreate = useCallback(async () => {
     if (plan.policies.length === 0 || plan.issues.length > 0) return;
@@ -456,6 +548,11 @@ const NetworkBridgePage: FC = () => {
       }
       dashboardLogger.info(LOG_ACTION, 'Create succeeded', succeeded.join(', '));
       setCreated({ policyNames: succeeded, bridgeName: bridgeName.trim() });
+      if (portShareSummary.nads.length > 0) {
+        // Whole-NIC bridge on a shared NIC (confirmed): those pods lose their interfaces.
+        setAffectedNads(portShareSummary.nads);
+        void loadAffectedPods(portShareSummary.nads);
+      }
     } catch (err) {
       const msg = getK8sErrorMessage(err);
       dashboardLogger.error(LOG_ACTION, 'Create failed', msg);
@@ -470,7 +567,7 @@ const NetworkBridgePage: FC = () => {
     } finally {
       setCreating(false);
     }
-  }, [plan.policies, plan.issues.length, bridgeName, bridgeType, selectedPort, t]);
+  }, [plan.policies, plan.issues.length, bridgeName, bridgeType, selectedPort, t, portShareSummary, loadAffectedPods]);
 
   const handleCreateAnother = useCallback(() => {
     const nextName = suggestBridgeName(usedBridgeNames, bridgeType);
@@ -523,7 +620,9 @@ const NetworkBridgePage: FC = () => {
     if (removing) return;
     setRemoveTarget(null);
     setRemoveError(null);
+    setAllowSharedRemove(false);
   }, [removing]);
+
 
   const handleRemove = useCallback(
     async (item: BridgeInventoryItem) => {
@@ -534,6 +633,7 @@ const NetworkBridgePage: FC = () => {
         nnsList: nns,
         nncps,
         scopeNodeNames,
+        nads,
       });
       if (removalPlan.issues.length > 0) {
         const msg = removalPlan.issues.map((issue) => t(issue.key, issue.values)).join(' ');
@@ -569,6 +669,7 @@ const NetworkBridgePage: FC = () => {
                 spec: {
                   ...(current.spec || {}),
                   nodeSelector: current.spec?.nodeSelector || {},
+                  maxUnavailable: NNCP_MAX_UNAVAILABLE,
                   desiredState: removalPlan.desiredState,
                 },
               } as unknown as K8sResourceCommon,
@@ -618,7 +719,13 @@ const NetworkBridgePage: FC = () => {
             ? t('Deleted leftover policy for {{name}}.', { name: item.name })
             : t('Removed bridge {{name}}.', { name: item.name }),
         );
+        const nadNames = summarizePortUses(removalPlan.sharedPorts).nads;
+        if (nadNames.length > 0) {
+          setAffectedNads(nadNames);
+          void loadAffectedPods(nadNames);
+        }
         setRemoveTarget(null);
+        setAllowSharedRemove(false);
         setRemovePhase('');
       } catch (err) {
         const msg = getK8sErrorMessage(err);
@@ -628,7 +735,7 @@ const NetworkBridgePage: FC = () => {
         setRemoving(false);
       }
     },
-    [selectedGroups, nodes, nns, nncps, scopeNodeNames, t, waitForNncpApply],
+    [selectedGroups, nodes, nns, nncps, scopeNodeNames, nads, t, waitForNncpApply, loadAffectedPods],
   );
 
   const requestRemove = useCallback((item: BridgeInventoryItem) => {
@@ -989,6 +1096,63 @@ const NetworkBridgePage: FC = () => {
             </StackItem>
           )}
 
+          {(affectedNads.length > 0 || restartMessage || restartError) && (
+            <StackItem>
+              <Alert
+                variant={restartError ? 'danger' : affectedNads.length > 0 ? 'warning' : 'success'}
+                isInline
+                title={affectedNads.length > 0 ? t('Pods lost their network interfaces') : t('Pod restarts')}
+              >
+                <Stack hasGutter>
+                  {affectedNads.length > 0 && (
+                    <StackItem>
+                      {t('The NIC was re-activated, so pods on {{nads}} no longer have those interfaces. Restart them once the policy is Available on every node: one at a time, Ceph monitors first, each waiting for its replacement to be Ready.', {
+                        nads: affectedNads.join(', '),
+                      })}
+                    </StackItem>
+                  )}
+                  {affectedPods && affectedPods.length > 0 && (
+                    <StackItem>
+                      {t('{{count}} pods: {{pods}}', {
+                        count: affectedPods.length,
+                        pods: affectedPods.map((p) => `${p.namespace}/${p.name}`).join(', '),
+                      })}
+                    </StackItem>
+                  )}
+                  {restartMessage && <StackItem>{restartMessage}</StackItem>}
+                  {restartError && <StackItem>{restartError}</StackItem>}
+                  {affectedNads.length > 0 && (
+                    <StackItem>
+                      <Button
+                        variant="primary"
+                        onClick={() => void restartAffectedPods()}
+                        isLoading={restarting}
+                        isDisabled={restarting || !affectedPods || affectedPods.length === 0}
+                      >
+                        {t('Restart affected pods')}
+                      </Button>{' '}
+                      <Button variant="link" onClick={() => void loadAffectedPods(affectedNads)} isDisabled={restarting}>
+                        {t('Refresh list')}
+                      </Button>{' '}
+                      <Button
+                        variant="link"
+                        onClick={() => {
+                          setAffectedNads([]);
+                          setAffectedPods(null);
+                          setRestartMessage('');
+                          setRestartError(null);
+                        }}
+                        isDisabled={restarting}
+                      >
+                        {t('Dismiss')}
+                      </Button>
+                    </StackItem>
+                  )}
+                </Stack>
+              </Alert>
+            </StackItem>
+          )}
+
           {/* Section C: Bridge Configuration */}
           {showBridgeForm && selectedFingerprint && (
             <StackItem>
@@ -1306,8 +1470,64 @@ const NetworkBridgePage: FC = () => {
                         </Alert>
                       </StackItem>
                     ))}
+                    {portShares.length > 0 && createdNames.length === 0 && (
+                      <StackItem>
+                        <Alert
+                          variant="danger"
+                          isInline
+                          title={t('{{port}} is shared with other networks', { port: selectedPort })}
+                        >
+                          <Stack hasGutter>
+                            <StackItem>
+                              {t('Adding a NIC to a bridge (and removing it later) makes NetworkManager re-activate it on every node. Everything on top of it goes down and is rebuilt: its VLAN interfaces, the cluster network if br-ex uses it, and the macvlan/ipvlan interfaces of pods, which do not come back until those pods restart. With ODF on Multus this takes Ceph down.')}
+                            </StackItem>
+                            <StackItem>
+                              <DescriptionList isCompact isHorizontal>
+                                {portShareSummary.vlanChildren.length > 0 && (
+                                  <DescriptionListGroup>
+                                    <DescriptionListTerm>{t('VLAN interfaces')}</DescriptionListTerm>
+                                    <DescriptionListDescription>{portShareSummary.vlanChildren.join(', ')}</DescriptionListDescription>
+                                  </DescriptionListGroup>
+                                )}
+                                {portShareSummary.brExNodes.length > 0 && (
+                                  <DescriptionListGroup>
+                                    <DescriptionListTerm>{t('Cluster network (br-ex)')}</DescriptionListTerm>
+                                    <DescriptionListDescription>{portShareSummary.brExNodes.join(', ')}</DescriptionListDescription>
+                                  </DescriptionListGroup>
+                                )}
+                                {portShareSummary.nads.length > 0 && (
+                                  <DescriptionListGroup>
+                                    <DescriptionListTerm>{t('Pod networks')}</DescriptionListTerm>
+                                    <DescriptionListDescription>{portShareSummary.nads.join(', ')}</DescriptionListDescription>
+                                  </DescriptionListGroup>
+                                )}
+                              </DescriptionList>
+                            </StackItem>
+                            <StackItem>
+                              {t('Recommended: put the bridge on a VLAN interface ({{example}}). Only that new interface is created; {{port}} and everything on it stay untouched.', {
+                                example: `${selectedPort}.<VLAN ID>`,
+                                port: selectedPort,
+                              })}
+                            </StackItem>
+                            <StackItem>
+                              <Button variant="primary" onClick={() => setEnableVlan(true)}>
+                                {t('Use a VLAN interface instead')}
+                              </Button>
+                            </StackItem>
+                            <StackItem>
+                              <Checkbox
+                                id="netbridge-allow-shared-port"
+                                isChecked={allowSharedPort}
+                                onChange={(_e, checked) => setAllowSharedPort(Boolean(checked))}
+                                label={t('Bridge the whole NIC anyway. I understand the networks listed above go down on each node while it is applied, and the affected pods must be restarted afterwards.')}
+                              />
+                            </StackItem>
+                          </Stack>
+                        </Alert>
+                      </StackItem>
+                    )}
                     {createdNames.length === 0 &&
-                      plan.issues.map((issue) => (
+                      plan.issues.filter((issue) => issue.key !== '{{port}} also carries other networks. Use a VLAN interface for the bridge, or confirm bridging the whole NIC below.').map((issue) => (
                         <StackItem key={issue.key + JSON.stringify(issue.values || {})}>
                           <Alert variant="danger" isInline title={t(issue.key, issue.values)} />
                         </StackItem>
@@ -1467,6 +1687,30 @@ const NetworkBridgePage: FC = () => {
                   <Alert variant="warning" isInline title={t(w.key, w.values)} />
                 </StackItem>
               ))}
+              {removePlanPreview && removePlanPreview.sharedPorts.length > 0 && (
+                <StackItem>
+                  <Alert variant="danger" isInline title={t('This bridge uses a NIC that other networks share')}>
+                    <Stack hasGutter>
+                      <StackItem>
+                        {t('Removing it re-activates the NIC on every node: its VLAN interfaces ({{vlans}}) go down and are rebuilt, and pods on {{nads}} lose those interfaces until they restart.', {
+                          vlans: removeShareSummary.vlanChildren.join(', ') || '—',
+                          nads: removeShareSummary.nads.join(', ') || '—',
+                        })}
+                        {removeShareSummary.brExNodes.length > 0 &&
+                          ' ' + t('The cluster network (br-ex) on {{nodes}} is interrupted too.', { nodes: removeShareSummary.brExNodes.join(', ') })}
+                      </StackItem>
+                      <StackItem>
+                        <Checkbox
+                          id="netbridge-allow-shared-remove"
+                          isChecked={allowSharedRemove}
+                          onChange={(_e, checked) => setAllowSharedRemove(Boolean(checked))}
+                          label={t('I understand. Remove it one node at a time and offer to restart the affected pods afterwards.')}
+                        />
+                      </StackItem>
+                    </Stack>
+                  </Alert>
+                </StackItem>
+              )}
               <StackItem>
                 {removeTarget.nncpAlreadyAbsent && !removeTarget.inNns
                   ? t('Bridge {{name}} is already absent on the nodes. Delete the leftover policy {{policies}}?', {
@@ -1496,7 +1740,12 @@ const NetworkBridgePage: FC = () => {
           <Button
             variant="danger"
             onClick={() => removeTarget && handleRemove(removeTarget)}
-            isDisabled={removing || !removeTarget?.canRemove || Boolean(removePlanPreview && removePlanPreview.issues.length > 0)}
+            isDisabled={
+              removing ||
+              !removeTarget?.canRemove ||
+              Boolean(removePlanPreview && removePlanPreview.issues.length > 0) ||
+              Boolean(removePlanPreview && removePlanPreview.sharedPorts.length > 0 && !allowSharedRemove)
+            }
             isLoading={removing}
           >
             {removing

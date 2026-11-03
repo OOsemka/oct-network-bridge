@@ -16,6 +16,8 @@ Display name is **Network Bridge**. No PVC or discovery sidecar.
 
 **Current version:** `1.1.2` (package.json / consolePlugin.version).
 
+**Shared NICs:** adding a NIC to a bridge, or removing it from one, makes NetworkManager re-activate the NIC on each node: its VLAN interfaces are torn down and rebuilt (br-ex on `bond0.<vlan>`, ODF Multus VLANs), and the macvlan/ipvlan interfaces inside pods vanish until those pods restart. `portUses()` detects VLAN children, br-ex membership and macvlan/ipvlan/host-device NADs on the NIC or its VLANs. Create blocks a shared whole-NIC port unless the user picks a VLAN interface (recommended: only the new `<nic>.<vlan>` is created) or confirms the override; a VLAN tag whose interface already exists is blocked. Remove asks for the same confirmation. After a confirmed change the page offers **Restart affected pods** (`src/utils/pod-restart.ts`: one at a time, Ceph mons first, waiting for each owner to be Ready). Policies written by the tool use `maxUnavailable: 1`.
+
 **NMState:** the page needs the Kubernetes NMState operator. If the `nodenetworkstates.nmstate.io` CRD is missing, it shows a one-click install (`src/components/NmstateSetup.tsx`, `src/utils/nmstate-install.ts`: Subscription `kubernetes-nmstate-operator`, channel `stable`, `redhat-operators`, then the `NMState` instance), or **Finish NMState setup** when the operator is there but no NodeNetworkState is reported. The console SDK reports no error for a watch on a missing CRD, so detection is by the CRD itself.
 
 ## Architecture (short)

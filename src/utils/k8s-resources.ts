@@ -60,3 +60,39 @@ export const MachineConfigPoolModel: K8sModel = {
   plural: 'machineconfigpools',
   namespaced: false,
 };
+
+export const NetworkAttachmentDefinitionModel: K8sModel = {
+  apiGroup: 'k8s.cni.cncf.io',
+  apiVersion: 'v1',
+  kind: 'NetworkAttachmentDefinition',
+  plural: 'network-attachment-definitions',
+  abbr: 'NAD',
+  label: 'NetworkAttachmentDefinition',
+  labelPlural: 'NetworkAttachmentDefinitions',
+  namespaced: true,
+};
+
+export const PodModel: K8sModel = {
+  apiVersion: 'v1',
+  kind: 'Pod',
+  plural: 'pods',
+  abbr: 'P',
+  label: 'Pod',
+  labelPlural: 'Pods',
+  namespaced: true,
+};
+
+const appsModel = (kind: string, plural: string, abbr: string): K8sModel => ({
+  apiGroup: 'apps',
+  apiVersion: 'v1',
+  kind,
+  plural,
+  abbr,
+  label: kind,
+  labelPlural: `${kind}s`,
+  namespaced: true,
+});
+
+export const ReplicaSetModel = appsModel('ReplicaSet', 'replicasets', 'RS');
+export const StatefulSetModel = appsModel('StatefulSet', 'statefulsets', 'STS');
+export const DaemonSetModel = appsModel('DaemonSet', 'daemonsets', 'DS');
