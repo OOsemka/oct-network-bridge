@@ -7,8 +7,8 @@ Standalone OpenShift Console plugin that creates linux-bridge and ovs-bridge int
 Deleting a policy does **not** remove a live bridge. **Remove** applies `state: absent` first, waits for NMState, then deletes the policy. The bridge that carries `br-ex` (cluster default network) cannot be removed.
 
 - **Plugin ID:** `oct-network-bridge`
-- **Version:** `1.1.2`
-- **Image:** `quay.io/cjanisze/oct-network-bridge:1.1.2-ocp4.22` and `:1.1.2-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
+- **Version:** `1.1.3`
+- **Image:** `quay.io/cjanisze/oct-network-bridge:1.1.3-ocp4.22` and `:1.1.3-ocp4.21` (`<semver>-ocp<major.minor>`; always publish both minors)
 
 Validated on OpenShift **4.22** (PatternFly 6). Open from **Community Tools → Network** after the storefront (`oct-storefront`) and this plugin are enabled.
 
