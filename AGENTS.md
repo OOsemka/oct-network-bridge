@@ -9,14 +9,16 @@ This repository is the **Network Bridge** ConsolePlugin: create linux-bridge and
 | | Value |
 | --- | --- |
 | Plugin ID / ConsolePlugin / `package.json` `consolePlugin.name` | **`oct-network-bridge`** |
-| Image | `quay.io/cjanisze/oct-network-bridge:1.1.3-ocp4.22` (`<semver>-ocp<major.minor>`) |
+| Image | `quay.io/cjanisze/oct-network-bridge:1.1.4-ocp4.22` (`<semver>-ocp<major.minor>`) |
 | i18n | `plugin__oct-network-bridge` |
 
 Display name is **Network Bridge**. No PVC or discovery sidecar.
 
-**Current version:** `1.1.3` (package.json / consolePlugin.version).
+**Current version:** `1.1.4` (package.json / consolePlugin.version).
 
 **Shared NICs:** adding a NIC to a bridge, or removing it from one, makes NetworkManager re-activate the NIC on each node: its VLAN interfaces are torn down and rebuilt (br-ex on `bond0.<vlan>`, ODF Multus VLANs), and the macvlan/ipvlan interfaces inside pods vanish until those pods restart. `portUses()` detects VLAN children, br-ex membership and macvlan/ipvlan/host-device NADs on the NIC or its VLANs. Create blocks a shared whole-NIC port unless the user picks a VLAN interface (recommended: only the new `<nic>.<vlan>` is created) or confirms the override; a VLAN tag whose interface already exists is blocked. Remove asks for the same confirmation. After a confirmed change the page offers **Restart affected pods** (`src/utils/pod-restart.ts`: one at a time, Ceph mons first, waiting for each owner to be Ready). Policies written by the tool use `maxUnavailable: 1`.
+
+**MTU:** the MTU field suggests 9000 when the selected port is at 9000 or more on every targeted node (`portMtuLimit()` from NodeNetworkState), else the port's MTU. It is written to the VLAN interface and the Linux bridge; OVS bridges have no MTU (OVN localnet networks set theirs in Network VLAN). The tool never changes the NIC's MTU, so a value above the port MTU is blocked. Pods and VMs only get the larger MTU when their NAD sets it (Network VLAN does).
 
 **NMState:** the page needs the Kubernetes NMState operator. If the `nodenetworkstates.nmstate.io` CRD is missing, it shows a one-click install (`src/components/NmstateSetup.tsx`, `src/utils/nmstate-install.ts`: Subscription `kubernetes-nmstate-operator`, channel `stable`, `redhat-operators`, then the `NMState` instance), or **Finish NMState setup** when the operator is there but no NodeNetworkState is reported. The console SDK reports no error for a watch on a missing CRD, so detection is by the CRD itself.
 
@@ -60,7 +62,7 @@ MCPs are watched cluster-wide. `buildMcpNicGroups` fingerprints physical NIC nam
 Two axes in the catalog: git tag **`v1.x.x`** (semver) and optional branch **`ocp-X.Y`** when PatternFly or APIs diverge. Image tags **always** `<semver>-ocp<major.minor>` (e.g. `1.0.0-ocp4.22`). Storefront Add installs the newest stable semver compatible with the cluster; Update is explicit; one ConsolePlugin name runs one version.
 
 - Git: `main` tracks the newest supported minor (currently **4.22**). Optional `ocp-4.22`, `ocp-4.21`.
-- Images: `oct-network-bridge:1.1.3-ocp4.22` and `:1.1.3-ocp4.21`. **Always publish both** OpenShift minor tags (same digest if bits match). Catalog `versions[].image` must be the combined tag.
+- Images: `oct-network-bridge:1.1.4-ocp4.22` and `:1.1.4-ocp4.21`. **Always publish both** OpenShift minor tags (same digest if bits match). Catalog `versions[].image` must be the combined tag.
 - PatternFly 6 on 4.22; do not mix PF majors on one branch.
 
 ## Navigation (React Router v6 via v5-compat)

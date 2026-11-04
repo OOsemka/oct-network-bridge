@@ -162,5 +162,15 @@
   "Use a VLAN interface instead": "Use a VLAN interface instead",
   "VLAN interfaces": "VLAN interfaces",
   "{{count}} pods: {{pods}}": "{{count}} pods: {{pods}}",
-  "{{port}} is shared with other networks": "{{port}} is shared with other networks"
+  "{{port}} is shared with other networks": "{{port}} is shared with other networks",
+  "{{port}} also carries other networks. Use a VLAN interface for the bridge, or confirm bridging the whole NIC below.": "{{port}} also carries other networks. Use a VLAN interface for the bridge, or confirm bridging the whole NIC below.",
+  "VLAN interface {{name}} already exists on {{nodes}}. Bridging it would take down what uses it today; pick another VLAN ID.": "VLAN interface {{name}} already exists on {{nodes}}. Bridging it would take down what uses it today; pick another VLAN ID.",
+  "MTU": "MTU",
+  "OVS bridges use the MTU of their port ({{limit}}). Set the MTU of each network on it in Network VLAN (OVN localnet).": "OVS bridges use the MTU of their port ({{limit}}). Set the MTU of each network on it in Network VLAN (OVN localnet).",
+  "NMState reports no MTU for {{port}}; 1500 is the safe default.": "NMState reports no MTU for {{port}}; 1500 is the safe default.",
+  "{{port}} runs at MTU {{limit}} on every targeted node, so jumbo frames (9000) are suggested.": "{{port}} runs at MTU {{limit}} on every targeted node, so jumbo frames (9000) are suggested.",
+  "Jumbo frames are not available: {{port}} runs at MTU {{limit}} on {{nodes}}. This tool does not change NIC settings; raise the NIC MTU first to use 9000.": "Jumbo frames are not available: {{port}} runs at MTU {{limit}} on {{nodes}}. This tool does not change NIC settings; raise the NIC MTU first to use 9000.",
+  "Pods and VMs get this MTU only when their network sets it too: use the same MTU in Network VLAN.": "Pods and VMs get this MTU only when their network sets it too: use the same MTU in Network VLAN.",
+  "MTU must be a whole number from {{min}} to {{max}}.": "MTU must be a whole number from {{min}} to {{max}}.",
+  "MTU {{mtu}} is larger than the MTU of {{port}} ({{limit}}). This tool does not change NIC settings; use {{limit}} or less.": "MTU {{mtu}} is larger than the MTU of {{port}} ({{limit}}). This tool does not change NIC settings; use {{limit}} or less."
 }

@@ -97,6 +97,12 @@ import {
   isMissingCrdError,
   isControlPlaneMcp,
   layoutNicsForNodes,
+  MTU_JUMBO,
+  MTU_MAX,
+  MTU_MIN,
+  portMtuLimit,
+  suggestMtu,
+  validateMtu,
   listBridgeInventory,
   nnceProgressSummary,
   nncpApplyOutcome,
@@ -198,6 +204,8 @@ const NetworkBridgePage: FC = () => {
   const [bridgeNameManual, setBridgeNameManual] = useState(false);
   const [enableVlan, setEnableVlan] = useState(false);
   const [vlanId, setVlanId] = useState('');
+  /** undefined: use the suggested MTU for the selected port. */
+  const [mtuOverride, setMtuOverride] = useState<number | undefined>(undefined);
   const [stpEnabled, setStpEnabled] = useState(false);
   const [mcastSnooping, setMcastSnooping] = useState(true);
   const [allowExtraPatchPorts, setAllowExtraPatchPorts] = useState(true);
@@ -335,6 +343,17 @@ const NetworkBridgePage: FC = () => {
   );
   useEffect(() => setAllowSharedPort(false), [selectedPort, vlanPort]);
 
+  /* ---- MTU ---- */
+  const portMtu = useMemo(
+    () => (selectedPort ? portMtuLimit(nns, selectedPort, targetNodeNames) : { limit: undefined, lowNodes: [] }),
+    [nns, selectedPort, targetNodeNames],
+  );
+  const suggestedMtu = suggestMtu(portMtu.limit);
+  const mtu = mtuOverride ?? suggestedMtu;
+  useEffect(() => setMtuOverride(undefined), [selectedPort]);
+  /** OVS bridges have no MTU; only a VLAN interface in front of one does. */
+  const mtuApplies = bridgeType === 'linux-bridge' || Boolean(vlanPort);
+
   /* ---- plan / validation ---- */
   const plan = useMemo(() => {
     const issues: { key: string; values?: Record<string, string> }[] = [];
@@ -357,6 +376,11 @@ const NetworkBridgePage: FC = () => {
     if (enableVlan && vlanId) {
       const vlanIssue = validateVlanId(vlanId);
       if (vlanIssue) issues.push(vlanIssue);
+    }
+
+    if (selectedPort && mtuApplies) {
+      const mtuIssue = validateMtu(mtu, portMtu.limit, selectedPort);
+      if (mtuIssue) issues.push(mtuIssue);
     }
 
     if (ipv4.mode === 'static' && targetNodeNames.length > 1) {
@@ -431,6 +455,7 @@ const NetworkBridgePage: FC = () => {
         ipv4,
         nodeSelector: target.nodeSelector,
         policyName,
+        mtu: mtuApplies ? mtu : undefined,
       };
 
       return buildBridgeNncp(buildOpts);
@@ -456,6 +481,9 @@ const NetworkBridgePage: FC = () => {
     allowSharedPort,
     vlanPortTakenOn,
     vlanPort,
+    mtu,
+    mtuApplies,
+    portMtu.limit,
   ]);
 
   const previewYaml = useMemo(() => {
@@ -1198,6 +1226,7 @@ const NetworkBridgePage: FC = () => {
                                 <Th>{t('Type')}</Th>
                                 <Th>{t('State')}</Th>
                                 <Th>{t('Speed')}</Th>
+                                <Th>{t('MTU')}</Th>
                               </Tr>
                             </Thead>
                             <Tbody>
@@ -1233,6 +1262,13 @@ const NetworkBridgePage: FC = () => {
                                     </Td>
                                     <Td dataLabel={t('Speed')}>
                                       {nic.speedMixed ? t('mixed') : formatSpeed(nic.speedMbps)}
+                                    </Td>
+                                    <Td dataLabel={t('MTU')}>
+                                      {nic.mtuMin === undefined
+                                        ? '—'
+                                        : nic.mtuMin === nic.mtuMax
+                                          ? String(nic.mtuMin)
+                                          : `${nic.mtuMin}–${nic.mtuMax}`}
                                     </Td>
                                   </Tr>
                                 );
@@ -1282,6 +1318,62 @@ const NetworkBridgePage: FC = () => {
                         </div>
                       )}
                     </FormGroup>
+
+                    {/* MTU */}
+                    {selectedPort && (
+                      <FormGroup label={t('MTU')} fieldId="netbridge-mtu">
+                        {mtuApplies ? (
+                          <NumberInput
+                            id="netbridge-mtu"
+                            value={mtu}
+                            min={MTU_MIN}
+                            max={MTU_MAX}
+                            onMinus={() => setMtuOverride(Math.max(MTU_MIN, mtu - 100))}
+                            onPlus={() => setMtuOverride(Math.min(MTU_MAX, mtu + 100))}
+                            onChange={(event) => {
+                              const val = parseInt((event.target as HTMLInputElement).value, 10);
+                              setMtuOverride(isNaN(val) ? undefined : val);
+                            }}
+                            widthChars={6}
+                          />
+                        ) : null}
+                        <FormHelperText>
+                          <HelperText>
+                            {!mtuApplies ? (
+                              <HelperTextItem>
+                                {t('OVS bridges use the MTU of their port ({{limit}}). Set the MTU of each network on it in Network VLAN (OVN localnet).', {
+                                  limit: portMtu.limit ? String(portMtu.limit) : '—',
+                                })}
+                              </HelperTextItem>
+                            ) : portMtu.limit === undefined ? (
+                              <HelperTextItem>
+                                {t('NMState reports no MTU for {{port}}; 1500 is the safe default.', { port: selectedPort })}
+                              </HelperTextItem>
+                            ) : portMtu.limit >= MTU_JUMBO ? (
+                              <HelperTextItem variant={mtu === suggestedMtu ? 'success' : 'default'}>
+                                {t('{{port}} runs at MTU {{limit}} on every targeted node, so jumbo frames (9000) are suggested.', {
+                                  port: selectedPort,
+                                  limit: String(portMtu.limit),
+                                })}
+                              </HelperTextItem>
+                            ) : (
+                              <HelperTextItem variant="warning">
+                                {t('Jumbo frames are not available: {{port}} runs at MTU {{limit}} on {{nodes}}. This tool does not change NIC settings; raise the NIC MTU first to use 9000.', {
+                                  port: selectedPort,
+                                  limit: String(portMtu.limit),
+                                  nodes: portMtu.lowNodes.join(', '),
+                                })}
+                              </HelperTextItem>
+                            )}
+                            {mtuApplies && (
+                              <HelperTextItem>
+                                {t('Pods and VMs get this MTU only when their network sets it too: use the same MTU in Network VLAN.')}
+                              </HelperTextItem>
+                            )}
+                          </HelperText>
+                        </FormHelperText>
+                      </FormGroup>
+                    )}
 
                     {/* Bridge Name */}
                     <FormGroup label={t('Bridge Name')} fieldId="netbridge-name" isRequired>
@@ -1567,6 +1659,12 @@ const NetworkBridgePage: FC = () => {
                           <DescriptionListGroup>
                             <DescriptionListTerm>{t('VLAN ID')}</DescriptionListTerm>
                             <DescriptionListDescription>{vlanId}</DescriptionListDescription>
+                          </DescriptionListGroup>
+                        )}
+                        {mtuApplies && selectedPort && (
+                          <DescriptionListGroup>
+                            <DescriptionListTerm>{t('MTU')}</DescriptionListTerm>
+                            <DescriptionListDescription>{String(mtu)}</DescriptionListDescription>
                           </DescriptionListGroup>
                         )}
                         <DescriptionListGroup>

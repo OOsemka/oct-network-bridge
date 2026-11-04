@@ -249,6 +249,9 @@ export type LayoutNic = {
   enslavedNodeCount: number;
   targetNodeCount: number;
   type: string;
+  /** Smallest and largest MTU of this NIC across the targeted nodes. */
+  mtuMin?: number;
+  mtuMax?: number;
 };
 
 export type OvnBridgeMapping = {
@@ -570,6 +573,7 @@ export function layoutNicsForNodes(
       new Set(enslaved.map((n) => n.controller).filter((c): c is string => Boolean(c))),
     );
     const types = Array.from(new Set(rows.map((n) => n.type)));
+    const mtus = rows.map((n) => n.mtu).filter((m): m is number => typeof m === 'number' && m > 0);
     return {
       name,
       speedMbps: speeds.length === 1 ? speeds[0] : undefined,
@@ -580,8 +584,62 @@ export function layoutNicsForNodes(
       enslavedNodeCount: enslaved.length,
       targetNodeCount: nodeNames.length,
       type: types.length === 1 ? types[0] : 'ethernet',
+      mtuMin: mtus.length > 0 ? Math.min(...mtus) : undefined,
+      mtuMax: mtus.length > 0 ? Math.max(...mtus) : undefined,
     };
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  MTU                                                                */
+/* ------------------------------------------------------------------ */
+
+export const MTU_MIN = 576;
+export const MTU_JUMBO = 9000;
+export const MTU_DEFAULT = 1500;
+export const MTU_MAX = 9216;
+
+/**
+ * Largest MTU the bridge can use without changing the NIC: the smallest MTU of
+ * the port on the targeted nodes. undefined when NMState reports no MTU.
+ */
+export function portMtuLimit(
+  nnsList: NodeNetworkStateKind[],
+  portName: string,
+  nodeNames: string[],
+): { limit?: number; lowNodes: string[] } {
+  const target = new Set(nodeNames);
+  const perNode: Array<{ node: string; mtu: number }> = [];
+  for (const nns of nnsList) {
+    if (!target.has(nns.metadata.name)) continue;
+    const iface = nnsInterfaces(nns).find(
+      (i) => i.name === portName && (i.type || '').toLowerCase() !== 'ovs-interface',
+    );
+    if (typeof iface?.mtu === 'number' && iface.mtu > 0) perNode.push({ node: nns.metadata.name, mtu: iface.mtu });
+  }
+  if (perNode.length === 0) return { limit: undefined, lowNodes: [] };
+  const limit = Math.min(...perNode.map((p) => p.mtu));
+  const lowNodes = limit < MTU_JUMBO ? perNode.filter((p) => p.mtu < MTU_JUMBO).map((p) => p.node).sort() : [];
+  return { limit, lowNodes };
+}
+
+/** 9000 (jumbo frames) when the port allows it everywhere, else the port's MTU. */
+export function suggestMtu(limit?: number): number {
+  if (!limit) return MTU_DEFAULT;
+  return limit >= MTU_JUMBO ? MTU_JUMBO : limit;
+}
+
+export function validateMtu(mtu: number, limit: number | undefined, port: string): PlanMessage | undefined {
+  if (!Number.isInteger(mtu) || mtu < MTU_MIN || mtu > MTU_MAX) {
+    return { key: 'MTU must be a whole number from {{min}} to {{max}}.', values: { min: String(MTU_MIN), max: String(MTU_MAX) } };
+  }
+  if (limit && mtu > limit) {
+    return {
+      key: 'MTU {{mtu}} is larger than the MTU of {{port}} ({{limit}}). This tool does not change NIC settings; use {{limit}} or less.',
+      values: { mtu: String(mtu), port, limit: String(limit) },
+    };
+  }
+  return undefined;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1124,6 +1182,12 @@ export type BuildBridgeNncpOpts = {
   ipv4: BridgeIpv4Config;
   nodeSelector: Record<string, string>;
   policyName: string;
+  /**
+   * MTU of the VLAN interface and the Linux bridge. OVS bridges have no MTU of
+   * their own (OVN localnet networks set theirs), so only the VLAN interface
+   * gets it there. Never applied to the port NIC itself.
+   */
+  mtu?: number;
 };
 
 export function buildBridgeDesiredState(opts: BuildBridgeNncpOpts): Record<string, unknown> {
@@ -1138,6 +1202,7 @@ export function buildBridgeDesiredState(opts: BuildBridgeNncpOpts): Record<strin
         name: vlanIfaceName,
         type: 'vlan',
         state: 'up',
+        ...(opts.mtu ? { mtu: opts.mtu } : {}),
         vlan: {
           'base-iface': opts.vlanBaseIface || opts.portName,
           id: opts.vlanTag,
@@ -1155,6 +1220,7 @@ export function buildBridgeDesiredState(opts: BuildBridgeNncpOpts): Record<strin
       name: opts.bridgeName,
       type: 'linux-bridge',
       state: 'up',
+      ...(opts.mtu ? { mtu: opts.mtu } : {}),
       ipv4: ipv4Spec(opts.ipv4),
       ipv6: { enabled: false },
       bridge: {
@@ -1178,6 +1244,7 @@ export function buildBridgeDesiredState(opts: BuildBridgeNncpOpts): Record<strin
         name: vlanIfaceName,
         type: 'vlan',
         state: 'up',
+        ...(opts.mtu ? { mtu: opts.mtu } : {}),
         vlan: {
           'base-iface': opts.vlanBaseIface || opts.portName,
           id: opts.vlanTag,
