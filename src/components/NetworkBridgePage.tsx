@@ -113,7 +113,6 @@ import {
   sanitizeK8sName,
   sleep,
   suggestBridgeName,
-  uniqueNodeNames,
   validateBridgeName,
   validateIpv4,
   validateVlanId,
