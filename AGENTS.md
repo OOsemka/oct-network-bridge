@@ -57,6 +57,8 @@ Deleting a NodeNetworkConfigurationPolicy does **not** remove a live bridge. Rem
 
 MCPs are watched cluster-wide. `buildMcpNicGroups` fingerprints physical NIC names per pool (identical vs mixed NICs). UI checkboxes only allow combining MCPs with the same NIC fingerprint. `planNncpTargets`: one covering `nodeSelector` for compact/SNO overlap; one NNCP per MCP when disjoint; per-hostname selectors to avoid double-apply when MCPs overlap.
 
+**Node targeting and per-node static IPv4** (`src/utils/node-ipv4.ts`, same file in `oct-network-bond`): the pool card lists the nodes of the selected pools, all ticked; unticked names are kept in `excludedNodeNames` so new pool members start included. When only some pool nodes are selected, when static IPv4 is chosen, or when `planNncpTargets` falls back to per-node, the page writes one NNCP per node (`perNodeTargets`: `kubernetes.io/hostname` selector, name `<bridge>-<node>`, kept unique). Static IPv4 takes one address per node with a shared prefix length and gateway; `checkNodeAddresses` blocks invalid or duplicate addresses, network/broadcast addresses, the gateway itself and addresses outside the gateway's subnet, and warns about addresses already present in NodeNetworkState or spread over different subnets.
+
 ## OpenShift and extension versions
 
 Two axes in the catalog: git tag **`v1.x.x`** (semver) and optional branch **`ocp-X.Y`** when PatternFly or APIs diverge. Image tags **always** `<semver>-ocp<major.minor>` (e.g. `1.0.0-ocp4.22`). Storefront Add installs the newest stable semver compatible with the cluster; Update is explicit; one ConsolePlugin name runs one version.
