@@ -21,6 +21,7 @@ Validated on OpenShift **4.22** (PatternFly 6). Open from **Community Tools → 
 
 Features:
 - **MachineConfigPool targeting:** MCPs fingerprinted by physical NIC names. Only MCPs with identical NIC sets can be combined.
+- **Node targeting and per-node static IPv4:** after picking pools, untick nodes to leave them out (down to a single node). Static IPv4 takes one address per selected node (shared prefix length and gateway, optional sequential fill) and creates one policy per node, pinned with `kubernetes.io/hostname`.
 - **VLAN tagging:** Optional VLAN sub-interface created before the bridge.
 - **OVN bridge-mappings:** Configurable localnet-to-bridge mappings for OVS bridges.
 - **Bridge inventory:** View existing linux-bridge and ovs-bridge interfaces with remove support.
